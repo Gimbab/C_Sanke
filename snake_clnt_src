@@ -1,0 +1,688 @@
+#include<stdio.h>
+#include<stdlib.h>
+#include<winsock2.h>
+#include<conio.h>
+#include<windows.h>
+#include<time.h>
+
+
+// 메크로 --------------------------
+#define WIDTH 120
+#define HEIGHT 45
+#define HORIZONTAL 1 // 수평 
+#define VERTICAL 0 // 수직 
+#define MAP_SIZE 15 // 맵 크기 
+
+#define UP 72  // 키보드 입력값들 정의
+#define LEFT 75
+#define RIGHT 77
+#define DOWN 80
+
+#define ENTER 13
+#define ESC 27
+// ---------------------------------
+
+// 전역 변수  ------------------------------------------------------
+int map[MAP_SIZE][MAP_SIZE]; // 맵 
+int t=1; // 증감 (+1 or -1) 
+int *direction; // 이동할 방향(수평, 수직) 
+int item_x, item_y; // 동전 위치 
+int coin_score; // 동전 점수 
+int direction_type; // 현제 방향 (수평, 수직) 
+int dir; // 입력 받은 키의 방향 (1: 위, 2: 아래, 3: 오른, 4: 왼) 
+int key_type; // 입력 받은 키의 방향 (수평, 수직) 
+int max_len = MAP_SIZE * MAP_SIZE; // 스네이크 최대 길이
+int delay_time; // 딜레이 시간  
+
+struct Player {
+    int current_x, current_y; // 현제 x,y
+	int pos_arr[MAP_SIZE*MAP_SIZE][2]; // 머리부터 꼬리까지 위치 배열 (queue 처럼 사용)
+	int front = 0, rear = 0; // 첫 째 인덱스, 마지막 인덱스 
+	int score = 0; // 점수 
+	int is_eat_item = 0;
+}p1;
+
+SOCKET serv_sock, clnt_sock; 
+// -----------------------------------------------------------------
+
+// 사용자 정의 함수(내가 짠거) ----------------------------------------------------
+int start_page(); // 게임 시작 화면 
+int get_player_type();	// 방생성, 방접속 입력받기 
+int get_pin(); // pin 번호(방 접속 번호) 입력받기 
+void end_page(int flag, int p1_score, int p2_score = 0); // 엔딩 화면
+void get_key(); // 키 입력 받기 
+void insert_snake(Player *p, int x, int y); // 뱀 머리 붙이기 (길이 +1) 머리를 붙이고 꼬리를 때며 이동 
+void delete_snake(Player *p, int x, int y); // 뱀 꼬리 때기 (길이 -1) 
+int check_snake(int x, int y); // 충돌 확인 
+void print_map(); // 맵 출력
+void print_item(int x, int y); // item 출력 
+void set_item(); // item 만들기, 출력 
+int check_item(int x, int y, int *score); // 코인 먹었는지 확인 
+void test(); // 테스트
+void count_ping(); // 3초 카운트 
+void count_act(); // 3초 카운트 받음 
+
+void err_handling(char *message); // 소켓 헨들링 
+void set_sock(int port); // 소켓 연결 
+void set_sock_cl(char *ip,char *port); // clnt 용 소켓 연결 
+void close_sock(); // 소켓 닫기 
+void send_mes(int flag, int cx=0, int cy=0, int ix =0 , int iy =0); // 메시지 보내기 
+void recv_act(Player *p2); // 받은 메시지 처리 
+
+void try_access_p1(); // p1로 서버접속 
+void try_access_p2(); // p2로 접속 
+// --------------------------------------------------------------------------------
+
+// 내가 짠거 아님 다른 블로그 찾아보셈 ---------------- 
+void gotoxy(short x, short y); // 화면 지우기 
+void set_cursor(int num); // 커서 지우기 
+//-----------------------------------------------------
+
+
+int main(int argc, char *argv[])
+{
+	system("mode con cols=120 lines=45"); // 콘솔의 크기설정
+	set_cursor(0); // 커서 숨기기 
+	
+	srand(time(NULL));
+	
+	char *ip = "45.76.96.77";
+	char *port = "3200";
+	
+	int game_mode = start_page();
+	
+	if(game_mode == 1){ // 멀티
+		set_sock_cl(ip, port);
+		
+		int p_type = get_player_type();	
+		
+		if(p_type == 0){ // 방생성, 호스트로 접속 
+			system("cls");
+			
+			char p_type_mes[] = "1";
+			send(serv_sock, p_type_mes, sizeof(p_type_mes), 0);
+			
+			char pin_mes[5] = {0,};
+			recv(serv_sock, pin_mes, sizeof(pin_mes),0);
+			gotoxy(WIDTH/2-8,15);
+			printf("pin : %s\n",pin_mes);
+			
+			char rec_mes[30] = {0,};
+			
+			while(1){
+				memset(rec_mes, 0, sizeof(rec_mes));
+				recv(serv_sock, rec_mes, sizeof(rec_mes), 0);
+				if(atoi(rec_mes) == 1)break;
+			}
+			p1.current_x = 2, p1.current_y = 2;
+		}
+		else if(p_type == 1){ // 방 접속, 게스트로 접속 
+			system("cls");
+			
+			char p_type_mes[] = "2";
+			send(serv_sock, p_type_mes, sizeof(p_type_mes), 0);
+			
+			char rec_mes[30] = {0,};
+			while(1){
+				memset(rec_mes, 0, sizeof(rec_mes));
+				
+				int pin = get_pin();
+				char pin_mes[4] = {0,};
+				char rec_mes[30] = {0,};
+				
+				sprintf(pin_mes, "%d", pin);
+				send(serv_sock, pin_mes, sizeof(pin_mes),0);
+				recv(serv_sock, rec_mes, sizeof(rec_mes),0);
+				if(atoi(rec_mes) == 1) break;
+				else if(atoi(rec_mes) == -1){
+					gotoxy(WIDTH/2-11,15);
+					printf("! 그런 pin 을 가진 방이 없음 !");
+					continue;
+				}
+			}
+			system("cls");
+			printf("ㅇㅇ 접속 성공, ㅈㅁ 기다리셈"); 
+			p1.current_x = 12, p1.current_y = 12;
+		}
+	}
+	
+	
+	// 인게임 요소 설정 ------------ 
+	
+	delay_time = 600; // 딜레이 (1000 == 1초) 
+	coin_score = 1; // 코인 흭득 점수 설정 
+	
+	// 초기 방향 설정 ----------- (첫 턴 입력 없을 시 -> 5,5 에서 오른쪽 한 칸(x+1) 이동) 
+	dir =3; // 방향 (위 왼쪽 오른쪽 아래) 
+	key_type = HORIZONTAL;	// 입력한 키 방향 (수직, 수평) 
+	direction_type = HORIZONTAL; // 이동할 방향 (수직, 수평) 
+	direction=&p1.current_x; // 증가, 감소할 변수(current_x, current_y)  
+	//---------------------------
+	
+	system("cls");
+	print_map();  // 맵 출력 
+	
+	if(game_mode==0)
+	{
+		p1.current_x = 5, p1.current_y = 5;  // 시작 위치 
+		insert_snake(&p1, p1.current_x, p1.current_y);  // 초기 스네이크 위치 출력 
+		set_item(); // 초기 코인 출력 
+		while(1)
+		{
+			get_key();	// 키 입력 
+			
+			if(p1.is_eat_item) set_item(); // 아이템 먹었으면 새 아이템 생성  
+			
+			insert_snake(&p1, p1.current_x, p1.current_y); // 머리 붙이기  
+			if(!p1.is_eat_item)delete_snake(&p1, p1.current_x, p1.current_y); // 아이템 안먹었으면 꼬리 때기=>아이템 먹으면 길이 +1
+			else p1.is_eat_item = 0;
+			
+			if(check_snake(p1.current_x, p1.current_y)) // 스네이크 죽었는지 확인 
+			{
+				end_page(-1, p1.score);
+				break;
+			}
+
+			if(check_item(p1.current_x, p1.current_y, &p1.score)) // 아이템 먹었는지 확인 
+				p1.is_eat_item = 1;
+			Sleep(delay_time);
+		}
+	}
+	
+	else
+	{
+		struct Player p2;
+
+		recv_act(&p2);
+		insert_snake(&p1, p1.current_x, p1.current_y);
+		insert_snake(&p2, p2.current_x, p2.current_y);
+		print_item(item_x, item_y);
+		count_act();
+		
+		while(1)
+		{
+			get_key();	// 키 입력 
+			if(p1.is_eat_item||p2.is_eat_item) set_item();
+			send_mes(p1.is_eat_item, p1.current_x, p1.current_y, item_x, item_y); // 현제 p1 snake 정보 전달 
+			recv_act(&p2); // 전달 받은 p2 snake 정보 처리 
+			
+			insert_snake(&p1, p1.current_x, p1.current_y);
+			if(!p1.is_eat_item)delete_snake(&p1, p1.current_x, p1.current_y); 
+			else p1.is_eat_item = 0;
+			
+			insert_snake(&p2, p2.current_x, p2.current_y); // p2 스네이크 업데이트 
+			if(!p2.is_eat_item)delete_snake(&p2, p2.current_x, p2.current_y);
+			else p2.is_eat_item = 0;
+			
+			// 죽었는지 체크 
+			if(check_snake(p1.current_x, p1.current_y)&&check_snake(p2.current_x, p2.current_y))// 동시에 죽음 
+				end_page(2, p1.score, p2.score);
+			else if(check_snake(p2.current_x, p2.current_y)) // 적이 죽음 
+				end_page(1, p1.score, p2.score);
+			else if(check_snake(p1.current_x, p1.current_y)) // 내꺼 죽음 
+				end_page(0, p1.score, p2.score);
+			
+			if(check_item(p1.current_x, p1.current_y, &p1.score))
+				p1.is_eat_item = 1;
+				
+			if(check_item(p2.current_x, p2.current_y, &p2.score))
+				p2.is_eat_item = 1;
+		}
+	}
+	
+	return 0;
+}
+
+void get_key()
+{
+	if(kbhit())
+	{	
+		int key=_getch();
+		
+		if(key==224||key==0) // 방향키 입력 받았을 때 
+		{
+			key=_getch();
+			switch(key) // 입력받은 키의 (수평 or 수직) , (상하좌우) 값 구하기 
+			{
+		        case UP : key_type = VERTICAL; dir = 1; break;//up
+		        case LEFT : key_type = HORIZONTAL; dir = 2; break;//left
+		        case RIGHT : key_type = HORIZONTAL; dir = 3; break;//right
+		        case DOWN : key_type = VERTICAL; dir = 4; break;//down
+		    }
+		}
+		else if(key==ESC)// 종료 
+		{ 
+			exit(1);
+		}
+		else if(key=='p') ;// pause 추가 예정 
+	};
+	if(direction_type!=key_type) // 같은 방향(수평, 수직) 입력 받았을 때 무시 
+	{
+				
+		direction_type = key_type;
+				
+		switch(dir) // 입력 받을 키의 (상하좌우) 방향에 따른 이동할 방향, 증가치 구함 
+		{
+			case 1: direction=&p1.current_y,t=-1; break;
+			case 2: direction=&p1.current_x,t=-1; break;
+			case 3: direction=&p1.current_x,t=1; break;
+			case 4: direction=&p1.current_y,t=1; break;
+		}
+	}
+			
+	*direction+=t; // 입력 값이 없어도 최근 입력한 키 +- 1 (수직 +-1, 수평 +-1) 
+}
+
+int get_pin(){
+	gotoxy(WIDTH/2-10 ,17);
+	printf("                            ");
+	
+	int key, key_len = 0;
+	char pin_str[4] ={0,};
+	char text1[] = "pin : ";
+	
+	gotoxy(WIDTH/2-15,17);
+	puts(text1);
+	
+	do
+	{
+		key = _getch();
+		
+		if(key>= '0' && key <= '9' && key_len <3){
+			key-=48;
+			gotoxy(WIDTH/2-8 + key_len,17);
+			printf("%d ",key);
+			sprintf(pin_str+key_len, "%d", key);
+			key_len++;
+		}
+		else if(key == 8 && key_len>0){
+			gotoxy(WIDTH/2-9 + key_len,17);
+			printf(" ");
+			pin_str[key_len] = '\0';
+			key_len--;
+		}
+	} while (key != ENTER);
+	return atoi(pin_str);
+}
+
+void insert_snake(Player *p, int x, int y)
+{
+	gotoxy((x+1)*2,y+1); printf("■"); // 네모 출력 
+	p->pos_arr[p->front][1]=x; // 
+	p->pos_arr[p->front][0]=y;
+	if(++p->front==max_len) p->front=0;
+	map[y][x]++;
+}
+
+void delete_snake(Player *p, int x, int y)
+{
+	map[p->pos_arr[p->rear][0]][p->pos_arr[p->rear][1]]=0;
+	gotoxy((p->pos_arr[p->rear][1]+1)*2,p->pos_arr[p->rear][0]+1); printf("  ");
+	if(++p->rear==max_len) p->rear=0;
+}
+
+void print_map()
+{
+	for(int i=0;i<MAP_SIZE+2;i++)
+	{
+		gotoxy(i*2,0); printf("■");
+		gotoxy(i*2,MAP_SIZE+1); printf("■");
+	}
+	for(int j=1;j<=MAP_SIZE;j++){
+		gotoxy(0,j); printf("■");
+		gotoxy((MAP_SIZE+1)*2,j); printf("■");
+	}
+}
+
+int check_snake(int x, int y)
+{
+	if(map[y][x]>1||x<0||x>=MAP_SIZE||y<0||y>=MAP_SIZE)
+	{
+		return 1;
+	}
+	return 0;
+}
+
+void set_item()
+{
+	item_x = rand() % MAP_SIZE;
+	item_y = rand() % MAP_SIZE;
+	gotoxy((item_x+1)*2,item_y+1); printf("º");
+}
+
+void print_item(int x, int y)
+{
+	gotoxy((item_x+1)*2,item_y+1); printf("º");
+}
+
+int check_item(int x, int y, int *score)
+{
+	if(x == item_x && y== item_y)
+	{
+    	++*score;
+        
+        return 1;
+	}
+	
+	return 0;
+}
+
+int start_page(){
+	char title_snake[5][100]={  "    //   ) )     /|    / /     // | |     //   / /     //   / /",
+								"   ((           //|   / /     //__| |    //__ / /     //____   ",
+								"     -         // |  / /     / ___  |   //__  /      / ____    ",
+								"       ) )    //  | / /     //    | |  //   | |     //         ",
+								"((___ / /    //   |/ /     //     | | //     | |   //____/ / 	"};
+								
+	char title_line[100]="===========================================================================";
+	
+	char player_game[2][100]={ "1 PLAYER GAME",
+						       "2 PLAYER GAME"};
+		
+	char enter_to[]="<< PRESS ENTER TO START >>";
+	
+	int i,key, g_type=0;
+	
+	system("cls");
+	
+	gotoxy(WIDTH/2-strlen(title_line)/2,2);
+	puts(title_line);
+	
+	for(i=0;i<5;i++){
+		gotoxy(WIDTH/2-strlen(title_snake[0])/2,5+i);
+		puts(title_snake[i]);
+	}
+	
+	gotoxy(WIDTH/2-strlen(title_line)/2,12);
+	puts(title_line);
+	
+	gotoxy(WIDTH/2-strlen(player_game[0])/2-1,17);
+	printf("1 PLAYER GAME");
+	gotoxy(WIDTH/2-strlen(player_game[0])/2-1,19);
+	printf("2 PLAYER GAME");
+	
+	gotoxy(WIDTH/2-10,17);
+	
+	printf("-");
+	
+	gotoxy(WIDTH/2-strlen(enter_to)/2,23);
+	puts(enter_to);
+	
+	do
+	{
+		key = _getch();
+		
+		if(key==224||key==0){
+			key = _getch();
+			if(key==UP)
+			{
+				gotoxy(WIDTH/2-10,19); printf("  ");
+				gotoxy(WIDTH/2-10,17); 	printf("-");
+				g_type=0;
+			}
+			else if(key==DOWN)
+			{
+				gotoxy(WIDTH/2-10,17); printf("  ");
+				gotoxy(WIDTH/2-10,19); 	printf("-");
+				g_type=1;
+			}
+		}
+		
+	} while (key != ENTER);
+	
+	return g_type;
+}
+
+int get_player_type(){
+	int p_type = 0, key;
+	
+	char text1[] = "ceate room";
+	char text2[] = "join room";
+	
+	system("cls");
+	
+	gotoxy(WIDTH/2-strlen(text1)/2,17);
+	puts(text1);
+	gotoxy(WIDTH/2-strlen(text1)/2,19);
+	puts(text2);
+	
+	gotoxy(WIDTH/2-10,17);
+	printf("-");
+	
+	do
+	{
+		key = _getch();
+		
+		if(key==224||key==0){
+			key = _getch();
+			if(key==UP)
+			{
+				gotoxy(WIDTH/2-10,19); printf("  ");
+				gotoxy(WIDTH/2-10,17); 	printf("-");
+				p_type=0;
+			}
+			else if(key==DOWN)
+			{
+				gotoxy(WIDTH/2-10,17); printf("  ");
+				gotoxy(WIDTH/2-10,19); 	printf("-");
+				p_type=1;
+			}
+		}
+		
+	} while (key != ENTER);
+	
+	return p_type;
+}
+
+void end_page(int flag, int p1_score, int p2_score)
+{
+	system("cls");
+	
+	switch(flag){
+		case 0 : printf("님 짐 ㅅㄱ\n"); printf("p2_score : %d", p2_score);break;
+		case 1 : printf("이겼다!\n"); printf("p2_score : %d", p2_score); break; 
+		case 2 : printf("동시에 머리박았네\n"); printf("%s 이김\n",p1_score>p2_score?"p1":"p2");
+		printf("p2_score : %d", p2_score); break; 
+	}
+	
+    printf("my score : %d",p1_score);
+    Sleep(3000);
+	exit(1);	
+}
+
+void count_ping()
+{
+	char count[] = "3";
+	send(clnt_sock, count, sizeof(count)-1,0);
+	gotoxy(60,10);puts(count);
+
+	count[0]='2';
+	Sleep(1000);	
+	send(clnt_sock, count, sizeof(count),0);
+	gotoxy(60,10);puts(count);
+	
+	count[0]='1';
+	Sleep(1000);
+	send(clnt_sock, count, sizeof(count),0);
+	gotoxy(60,10);puts(count);
+	
+	count[0]=' ';
+	Sleep(1000);
+	send(clnt_sock, count, sizeof(count),0);
+	gotoxy(60,10);puts(count);
+}
+
+void gotoxy(short x, short y)
+{
+	COORD pos={x,y};
+	SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos); 
+}
+
+void set_cursor(int num)
+{
+    CONSOLE_CURSOR_INFO curInfo;
+    GetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &curInfo);
+    curInfo.bVisible = num;
+    SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &curInfo);
+}
+
+
+void set_sock(int port)
+{
+	WSADATA wsaData;
+	SOCKADDR_IN serv_addr, clnt_addr;
+	
+	int szClntAddr;
+	
+	if(WSAStartup(MAKEWORD(2,2), &wsaData)!=0)
+		err_handling("WSAStartup() err");
+		
+	serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+	if(serv_sock<0)err_handling("sock err");
+	
+	memset(&serv_addr,0,sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	serv_addr.sin_port = htons(port);
+	
+	if(bind(serv_sock, (SOCKADDR*) &serv_addr, sizeof(serv_addr))<0)
+		err_handling("bind err");
+		
+	if(listen(serv_sock, 5)<0)
+		err_handling("listen err");
+	
+	szClntAddr = sizeof(clnt_addr);
+	
+	clnt_sock = accept(serv_sock, (SOCKADDR*)&clnt_addr, &szClntAddr);
+	if(clnt_sock <0)err_handling("accept err");
+}
+
+void set_sock_cl(char *ip,char *port)
+{
+	WSADATA wsaData;
+	SOCKADDR_IN serv_addr;
+	
+	if(WSAStartup(MAKEWORD(2,2), &wsaData)!=0)
+		err_handling("WSAStartup() err");
+	
+	serv_sock = socket(PF_INET, SOCK_STREAM, 0);	
+	if(serv_sock<0)err_handling("sock err");
+	
+	memset(&serv_addr,0,sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = inet_addr(ip);
+	serv_addr.sin_port = htons(atoi(port));
+	
+	if(connect(serv_sock, (SOCKADDR*) &serv_addr, sizeof(serv_addr))<0)
+		err_handling("connect err");
+}
+
+void close_sock()
+{
+	closesocket(clnt_sock);
+	closesocket(serv_sock);
+	
+	WSACleanup();
+}
+
+void err_handling(char *message)
+{
+	fputs(message, stderr);
+	fputc('\n', stderr);
+	exit(1);
+}
+
+void count_act()
+{
+	char count[2]={0,};
+	recv(serv_sock, count, sizeof(count),0);
+	gotoxy(60,10);puts(count);
+	
+	recv(serv_sock, count, sizeof(count),0);
+	gotoxy(60,10);puts(count);
+	
+	recv(serv_sock, count, sizeof(count),0);
+	gotoxy(60,10);puts(count);
+	
+	recv(serv_sock, count, sizeof(count),0);
+	gotoxy(60,10);puts(count);
+}
+
+void send_mes(int status, int cx, int cy, int ix, int iy)
+{
+	char mes[10]={0,};
+	itoa(status,mes,10);
+	
+	if(status != -1)
+	{
+		if(cx>=10)itoa(cx, mes+1,10);
+		else 
+		{
+			mes[1]='0';
+			itoa(cx, mes+2,10);
+		}
+		
+		if(cy>=10)itoa(cy, mes+3,10);
+		else 
+		{
+			mes[3]='0';
+			itoa(cy, mes+4,10);
+		}
+		
+		if(mes[0]=='1')
+		{
+			if(ix>=10)itoa(ix, mes+5,10);
+			else 
+			{
+				mes[5]='0';
+				itoa(ix, mes+6,10);
+			}
+			if(iy>=10)itoa(iy, mes+7,10);
+			else 
+			{
+				mes[7]='0';
+				itoa(iy, mes+8,10);
+			}
+		}
+	}
+	send(serv_sock,mes,sizeof(mes),0);
+	return;
+}
+
+void recv_act(Player *p2)
+{	
+	char mes[10]={0,};
+	recv(serv_sock, mes, sizeof(mes),0);
+	
+	int imes[9], mes_len=1;
+	
+	char tmp[3];
+	memset(tmp,0,3);
+	tmp[0]=mes[0];
+	imes[0]=atoi(tmp);
+	
+	switch (imes[0])
+	{
+		case 0 : mes_len = 2; break;
+		case 1 : mes_len = 4; break;
+		case -1 : mes_len = 0; break;
+	}
+		
+	for(int i = 1; i<= mes_len; i++)
+	{
+		memset(tmp,0,3);
+		strncpy(tmp,mes+i*2-1,2);
+		imes[i]=atoi(tmp);
+	}
+
+	p2->current_x = imes[1];
+	p2->current_y = imes[2];	
+	
+	if(imes[0]==1)
+	{
+		item_x = imes[3];
+		item_y = imes[4];
+		gotoxy((item_x+1)*2,item_y+1); printf("º");
+	}
+	return;
+}
